@@ -1,0 +1,187 @@
+#-------------------Input_variables-------------------
+# dir 1 means x # dir 2 means y # dir 3 means z
+variable        dir equal 3 
+
+# Strain settings
+variable        strain        equal 0.4  # Define maximum strain value
+variable        strain_rate_s equal 2e8  # Define strain rate (1/s)
+variable        strain_length equal 0.01 # Define length of strain for which to set number of points in (0.01 is a good default)
+variable        strain_points equal 250  # Define N-points per strain length (>100 is a good default) 
+
+# System naming
+variable        replicate string 1
+variable        system    string CNT_21A_50A_armchair
+variable        FF        string PCFF
+variable        myid      string tensile_${dir}_${system}_FF_${FF}_replicate_${replicate}
+
+#-------------------Compute steps related to strain-------------------
+# Need to define timestep here for other calcultions
+timestep        1.0
+
+# Compute total number of steps for simulation
+variable        strain_rate_fs equal ${strain_rate_s}*1e-15 # in 1/fs
+variable        totaltime equal ${strain}/${strain_rate_fs} # total time in femtoseconds
+variable        steps equal ${totaltime}/dt
+variable        eeng equal time*${strain_rate_fs}
+variable        etrue equal ln(1+v_eeng)
+
+# Compute how often to average and log strain points
+variable        time_per_1percent_strain equal ${strain_length}/${strain_rate_fs} # time for strain length in femtoseconds
+variable        steps_per_1percent_strain equal ${time_per_1percent_strain}/dt # steps for strain length in femtoseconds
+variable        nsteps equal round(v_steps_per_1percent_strain/v_strain_points)
+
+# Compute time in picoseconds
+variable        Time equal step*dt/1000 #time in picoseconds
+
+
+#-------------------Initialization-------------------
+units           real
+dimension       3
+boundary        p p p
+newton          on
+atom_style      full
+
+
+#-------------------Force_field-------------------
+label           start
+bond_style      class2
+angle_style     class2
+dihedral_style  class2
+improper_style  class2
+special_bonds   lj/coul 0 0 1
+neighbor        2.0 bin
+neigh_modify    delay 0 every 1 check yes one 5000 page 100000
+
+kspace_style    pppm 1.0e-4
+kspace_modify   gewald 0.1
+pair_style      lj/class2/coul/long 12.0
+pair_modify     mix sixthpower
+
+read_data       relax_CNT_21A_50A_armchair_replicate_1_FF_PCFF.data
+
+
+#------------Initialization (may not always be needed)----------------------
+#fix             1 all nve/limit 0.1
+#run             20000 # 0.01ns = 10ps
+#write_data      ${myid}_initialization.data
+#unfix           1
+
+
+#-------------------Fixes-------------------
+velocity        all create 298 4928459 dist gaussian
+if "${dir} == 1" then &
+  "fix          1 all nvt temp 298 298 $(100*dt)" &
+  "fix          2 all deform 1 x erate ${strain_rate_fs}" &
+  "variable     area equal ly*lz"
+
+if "${dir} == 2" then &
+  "fix          1 all nvt temp 298 298 $(100*dt)" &
+  "fix          2 all deform 1 y erate ${strain_rate_fs}" &
+  "variable     area equal lx*lz"
+
+if "${dir} == 3" then &
+  "fix          1 all nvt temp 298 298 $(100*dt)" &
+  "fix          2 all deform 1 z erate ${strain_rate_fs}" &
+  "variable     area equal lx*ly"
+
+
+#-------------------Calculate_strains-------------------
+variable        tmp equal lx
+variable        lx0 equal ${tmp}
+variable        tmp equal ly
+variable        ly0 equal ${tmp}
+variable        tmp equal lz
+variable        lz0 equal ${tmp}
+variable        eengx equal (lx-${lx0})/${lx0}
+variable        eengy equal (ly-${ly0})/${ly0}
+variable        eengz equal (lz-${lz0})/${lz0}
+variable        etruex equal ln(1+v_eengx)
+variable        etruey equal ln(1+v_eengy)
+variable        etruez equal ln(1+v_eengz)
+
+
+#-------------------Calculate_stresses-------------------
+# Compute stress based on box
+compute         p all pressure 1_temp
+variable        sxx equal -0.101325*c_p[1] # in MPa
+variable        syy equal -0.101325*c_p[2] # in MPa
+variable        szz equal -0.101325*c_p[3] # in MPa
+variable        sxy equal -0.101325*c_p[4] # in MPa
+variable        sxz equal -0.101325*c_p[5] # in MPa
+variable        syz equal -0.101325*c_p[6] # in MPa
+
+fix             sxx_ave all ave/time 1 ${nsteps} ${nsteps} v_sxx
+fix             syy_ave all ave/time 1 ${nsteps} ${nsteps} v_syy
+fix             szz_ave all ave/time 1 ${nsteps} ${nsteps} v_szz
+fix             sxy_ave all ave/time 1 ${nsteps} ${nsteps} v_sxy
+fix             sxz_ave all ave/time 1 ${nsteps} ${nsteps} v_sxz
+fix             syz_ave all ave/time 1 ${nsteps} ${nsteps} v_syz
+
+# Compute stress based on CNT volume
+#   Compute diameter in x and radius in y (dx and dy) based on min/max atom positions
+compute         positions all property/atom x y z  # Find unscaled atom postions
+compute         min_positions all reduce min c_positions[*]    # Find minimum postions
+compute         max_positions all reduce max c_positions[*]    # Find maximum postions
+variable        dx equal c_max_positions[1]-c_min_positions[1] # Find dx
+variable        dy equal c_max_positions[2]-c_min_positions[2] # Find dy
+
+#   Compute transverse strains in CNT
+variable        dx0 equal 21 # CNT intial diameter (Angstom)
+variable        dy0 equal 21 # CNT intial diameter (Angstom)
+variable        rengx equal (v_dx-${dx0})/${dx0}
+variable        rengy equal (v_dy-${dy0})/${dy0}
+variable        rtruex equal ln(1+v_rengx)
+variable        rtruey equal ln(1+v_rengy)
+
+#   Compute volume of CNT based on x- and y-postions and lx
+variable        pi equal 3.141592653589793 # Set pi-value
+variable        r equal (v_dx+v_dy)/4      # Compute effective radius
+variable        a equal v_pi*v_r*v_r       # Compute effective cross-sectional area
+variable        cnt_volume equal v_a*lz    # Compute effective CNT volume
+
+#    Compute stress within the CNT
+compute         peratom_stress all stress/atom NULL
+compute         stress_volume all reduce sum c_peratom_stress[*] # stress*volume
+variable        rxx equal (0.101325*c_stress_volume[1]/v_cnt_volume) # in MPa
+variable        ryy equal (0.101325*c_stress_volume[2]/v_cnt_volume) # in MPa
+variable        rzz equal (0.101325*c_stress_volume[3]/v_cnt_volume) # in MPa
+
+fix             rxx_ave all ave/time 1 ${nsteps} ${nsteps} v_rxx
+fix             ryy_ave all ave/time 1 ${nsteps} ${nsteps} v_ryy
+fix             rzz_ave all ave/time 1 ${nsteps} ${nsteps} v_rzz
+
+# Compute engineering stress
+variable        r0 equal 10.5 # Angstrom (21/2 = 10.5)
+variable        a0 equal v_pi*v_r0*v_r0
+variable        exx equal (-0.101325*c_p[1]*v_area)/v_a0 # in MPa
+variable        eyy equal (-0.101325*c_p[2]*v_area)/v_a0 # in MPa
+variable        ezz equal (-0.101325*c_p[3]*v_area)/v_a0 # in MPa
+variable        exy equal (-0.101325*c_p[4]*v_area)/v_a0 # in MPa
+variable        exz equal (-0.101325*c_p[5]*v_area)/v_a0 # in MPa
+variable        eyz equal (-0.101325*c_p[6]*v_area)/v_a0 # in MPa
+
+fix             exx_ave all ave/time 1 ${nsteps} ${nsteps} v_exx
+fix             eyy_ave all ave/time 1 ${nsteps} ${nsteps} v_eyy
+fix             ezz_ave all ave/time 1 ${nsteps} ${nsteps} v_ezz
+fix             exy_ave all ave/time 1 ${nsteps} ${nsteps} v_exy
+fix             exz_ave all ave/time 1 ${nsteps} ${nsteps} v_exz
+fix             eyz_ave all ave/time 1 ${nsteps} ${nsteps} v_eyz
+
+#-------------------Outputs-------------------
+thermo          ${nsteps}
+log             ${myid}.log.lammps
+thermo_style    custom step temp pe ke etotal press pxx pyy pzz v_etrue v_eengx v_eengy v_eengz v_etruex v_etruey v_etruez & 
+                f_sxx_ave f_syy_ave f_szz_ave f_sxy_ave f_sxz_ave f_syz_ave lx ly lz v_dir vol density ebond eangle edihed &
+				eimp evdwl ecoul elong epair v_Time v_rengx v_rengy v_rtruex v_rtruey v_dx v_dy v_r v_a v_cnt_volume &
+                f_rxx_ave f_ryy_ave f_rzz_ave f_exx_ave f_eyy_ave f_ezz_ave f_exy_ave f_exz_ave f_eyz_ave
+
+restart         ${nsteps} rst1.a.${myid} rst2.a.${myid}
+dump            6 all atom 10000 ${myid}.dump #every picosecond
+dump_modify     6 scale no sort id
+
+#-------------------Run-------------------
+run             ${steps}
+
+#-------------------Wrap up-------------------
+write_restart   ${myid}.restart
+write_data      ${myid}.data

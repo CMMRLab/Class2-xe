@@ -1,0 +1,43 @@
+# LAMMPS script to get XRD file
+#--------------Variables--------------
+
+variable        base string PFA_large_system_rep_1_carb_temp_2300K_2GPa_time_2000ps_equil
+variable        myid string ${base}_bonds
+
+variable        ptemp equal 300   # process temp (K)
+variable        press equal 1.0   # pressure (atm; 1 GPa ~= 10,000 atm) 
+
+#--------------initialization--------------
+units           real
+dimension       3
+boundary        p p p
+atom_style      charge
+
+#--------------ForceField--------------
+read_data       ${base}.data 
+pair_style      reaxff NULL safezone 5.0 mincap 100
+pair_coeff      * * ffield_CHON_for_PAN_PBO.reax C H O
+fix             charges all qeq/reaxff 1 0.0 10.0 1.0e-6 reaxff
+
+#--------------Reset atom ids--------------
+#reset_atom_ids  sort yes
+
+#--------------Settings--------------
+timestep        0.1
+thermo          100 #every 0.001 picosecond
+thermo_style    custom step temp press etotal ke pe density lx ly lz
+log             ${myid}.log.lammps
+
+
+#--------------XRD data--------------
+reset_atoms id  sort yes
+fix             1 all npt temp ${ptemp} ${ptemp} $(100*dt) aniso ${press} ${press} $(1000*dt)
+
+#--------------Get Bond information--------------
+fix             3 all reaxff/bonds 100 ${myid}.reaxff # This will be read into atom_typing.py
+
+
+#--------------Run--------------
+run             1000
+write_data      ${myid}.data
+
