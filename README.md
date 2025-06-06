@@ -1,4 +1,4 @@
-# Class-2xe molecular systems and code
+# Class2-xe molecular systems and code
 This directory holds the molecular systems used to benchmark the Class2-xe potential.
 
 ## Terms of use
